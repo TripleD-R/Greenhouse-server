@@ -115,7 +115,6 @@ app.post("/data", async (req, res) => {
 
         const newData = result.rows[0];
 
-        // 🔥 рассылаем всем клиентам
         io.emit("sensor_update", newData);
 
         res.sendStatus(200);
@@ -178,7 +177,6 @@ app.post("/settings", async (req, res) => {
 
         const updatedSettings = result.rows[0];
 
-        // 🔥 рассылаем всем
         io.emit("settings_update", updatedSettings);
 
         res.sendStatus(200);
@@ -190,7 +188,7 @@ app.post("/settings", async (req, res) => {
 // ==========================
 
 app.get("/", (req, res) => {
-    res.send("Server is working with WebSocket 🚀");
+    res.send("Server is working with WebSocket");
 });
 
 const PORT = process.env.PORT || 3000;
