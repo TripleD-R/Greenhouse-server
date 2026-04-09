@@ -91,6 +91,9 @@ app.post("/data", async (req, res) => {
     }
 });
 
+app.get("/", (req, res) => {
+    res.send("Server is working");
+});
 
 // история по сессии
 app.get("/data/history/:session_id", async (req, res) => {
