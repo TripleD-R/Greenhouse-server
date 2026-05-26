@@ -132,12 +132,9 @@ io.on("connection", (socket) => {
             // Рассылаем ВСЕМ клиентам (включая отправителя)
             io.emit("settings_update", updatedSettings);
 
-            // Если ESP подключена — отправляем ей настройки в формате, который она ожидает
-            io.sockets.sockets.forEach(s => {
-                if (s.isESP) {
-                    s.emit("esp_settings", espSettings);
-                }
-            });
+            // Отправляем настройки ESP всем подключённым сокетам,
+            // чтобы не зависеть от метки isESP на момент обновления
+            io.emit("esp_settings", espSettings);
         } catch (err) {
             console.error("Settings update error:", err);
             socket.emit("settings_error", { error: err.message });
@@ -298,12 +295,8 @@ app.post("/api/settings", async (req, res) => {
         // Рассылаем всем клиентам через WebSocket
         io.emit("settings_update", updatedSettings);
 
-        // Отправляем настройки ESP если подключена
-        io.sockets.sockets.forEach(s => {
-            if (s.isESP) {
-                s.emit("esp_settings", espSettings);
-            }
-        });
+        // Отправляем настройки ESP всем подключённым сокетам
+        io.emit("esp_settings", espSettings);
 
         res.json(updatedSettings);
     } catch (err) {
