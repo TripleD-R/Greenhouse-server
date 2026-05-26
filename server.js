@@ -123,13 +123,19 @@ io.on("connection", (socket) => {
             const updatedSettings = result.rows[0];
             cachedSettings = updatedSettings;
 
+            const espSettings = {
+                maxTemp: updatedSettings.max_temp,
+                minSoil: updatedSettings.min_hum,
+                minLight: updatedSettings.min_light,
+            };
+
             // Рассылаем ВСЕМ клиентам (включая отправителя)
             io.emit("settings_update", updatedSettings);
 
-            // Если ESP подключена — отправляем ей настройки
+            // Если ESP подключена — отправляем ей настройки в формате, который она ожидает
             io.sockets.sockets.forEach(s => {
                 if (s.isESP) {
-                    s.emit("esp_settings", updatedSettings);
+                    s.emit("esp_settings", espSettings);
                 }
             });
         } catch (err) {
@@ -283,13 +289,19 @@ app.post("/api/settings", async (req, res) => {
         const updatedSettings = result.rows[0];
         cachedSettings = updatedSettings;
 
+        const espSettings = {
+            maxTemp: updatedSettings.max_temp,
+            minSoil: updatedSettings.min_hum,
+            minLight: updatedSettings.min_light,
+        };
+
         // Рассылаем всем клиентам через WebSocket
         io.emit("settings_update", updatedSettings);
 
         // Отправляем настройки ESP если подключена
         io.sockets.sockets.forEach(s => {
             if (s.isESP) {
-                s.emit("esp_settings", updatedSettings);
+                s.emit("esp_settings", espSettings);
             }
         });
 
