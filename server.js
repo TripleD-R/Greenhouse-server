@@ -107,6 +107,30 @@ io.on("connection", (socket) => {
         }
     });
 
+    // --- ESP запрашивает настройки после подключения ---
+    socket.on("esp_init", async () => {
+        socket.isESP = true;
+
+        try {
+            const result = await pool.query(`SELECT * FROM settings WHERE id=1`);
+            const currentSettings = result.rows[0] || {
+                max_temp: 30,
+                min_hum: 40,
+                min_light: 30,
+            };
+            const espSettings = {
+                maxTemp: currentSettings.max_temp,
+                minSoil: currentSettings.min_hum,
+                minLight: currentSettings.min_light,
+            };
+
+            socket.emit("esp_settings", espSettings);
+            console.log("Sent current settings to ESP on init", espSettings);
+        } catch (err) {
+            console.error("ESP init settings error:", err);
+        }
+    });
+
     // --- Клиент отправляет настройки ---
     socket.on("settings_push", async (settings) => {
         const { max_temp, min_hum, min_light } = settings;
