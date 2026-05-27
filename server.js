@@ -81,6 +81,7 @@ io.on("connection", (socket) => {
         }
 
         const { temperature, soil, light } = data;
+        const roundedTemperature = Math.round(parseFloat(temperature) * 10) / 10;
 
         // Если сессия ещё не начата — создаём
         if (!currentSessionId) {
@@ -103,7 +104,7 @@ io.on("connection", (socket) => {
             const result = await pool.query(
                 `INSERT INTO sensor_data (temperature, humidity, light, session_id)
                  VALUES ($1, $2, $3, $4) RETURNING *`,
-                [temperature, soil, light, currentSessionId]
+                [roundedTemperature, soil, light, currentSessionId]
             );
             const newData = result.rows[0];
 
@@ -274,6 +275,7 @@ app.post("/api/session/start", async (req, res) => {
 // Микроконтроллер: отправка данных (HTTP fallback)
 app.post("/api/data", async (req, res) => {
     const { temperature, humidity, light, session_id } = req.body;
+    const roundedTemperature = Math.round(parseFloat(temperature) * 10) / 10;
 
     try {
         // Если сессия не начата — создаём
@@ -289,7 +291,7 @@ app.post("/api/data", async (req, res) => {
         const result = await pool.query(
             `INSERT INTO sensor_data (temperature, humidity, light, session_id)
              VALUES ($1, $2, $3, $4) RETURNING *`,
-            [temperature, humidity, light, currentSessionId]
+            [roundedTemperature, humidity, light, currentSessionId]
         );
         const newData = result.rows[0];
 
