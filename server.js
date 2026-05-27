@@ -87,12 +87,15 @@ io.on("connection", (socket) => {
         if (!currentSessionId) {
             try {
                 const res = await pool.query(
-                    `INSERT INTO sessions (status, device_ip) VALUES ('active', $1) RETURNING id`,
+                    `INSERT INTO sessions (status, device_ip) VALUES ('active', $1) RETURNING id, start_time`,
                     [socket.handshake.address]
                 );
                 currentSessionId = res.rows[0].id;
+                const startTime = res.rows[0].start_time;
                 currentSessionData = [];
                 console.log("New ESP session started:", currentSessionId);
+                // уведомляем клиентов о новой сессии
+                io.emit('session_started', { id: currentSessionId, start_time: startTime });
             } catch (err) {
                 console.error("Session create error:", err);
                 return;
@@ -123,16 +126,23 @@ io.on("connection", (socket) => {
     });
 
     // --- Микроконтроллер отключился ---
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
         console.log("Client disconnected:", socket.id, "isESP:", socket.isESP);
 
         if (socket.isESP) {
             // Завершаем сессию
             if (currentSessionId) {
-                pool.query(
-                    `UPDATE sessions SET status='inactive', end_time=NOW() WHERE id=$1`,
-                    [currentSessionId]
-                ).catch(err => console.error("Session end error:", err));
+                try {
+                    const res = await pool.query(
+                        `UPDATE sessions SET status='inactive', end_time=NOW() WHERE id=$1 RETURNING end_time`,
+                        [currentSessionId]
+                    );
+                    const endTime = res.rows[0] ? res.rows[0].end_time : null;
+                    // уведомляем клиентов о завершении сессии
+                    io.emit('session_ended', { id: currentSessionId, end_time: endTime });
+                } catch (err) {
+                    console.error("Session end error:", err);
+                }
                 currentSessionId = null;
                 currentSessionData = [];
                 console.log("ESP session ended");
@@ -198,6 +208,17 @@ io.on("connection", (socket) => {
         }
     });
 
+    const getSessionHistory = async (sessionId) => {
+        const dataResult = await pool.query(
+            `SELECT temperature, humidity, light, created_at
+             FROM sensor_data
+             WHERE session_id = $1
+             ORDER BY created_at ASC`,
+            [sessionId]
+        );
+        return dataResult.rows;
+    };
+
     const getLastSessionHistory = async (limit = 20) => {
         const sessionResult = await pool.query(
             `SELECT id FROM sessions ORDER BY id DESC LIMIT 1`
@@ -222,16 +243,13 @@ io.on("connection", (socket) => {
     // --- Клиент запрашивает последние 20 значений ---
     socket.on("get_history", async (callback) => {
         try {
-            // Если в памяти есть активная сессия, отдаём её
-            if (currentSessionData.length > 0) {
-                if (typeof callback === "function") {
-                    callback(currentSessionData);
-                }
-                return;
+            let history = [];
+            if (currentSessionId) {
+                history = await getSessionHistory(currentSessionId);
+            } else {
+                history = await getLastSessionHistory(20);
             }
 
-            // В противном случае берём последние 20 точек из самой последней сессии из БД
-            const history = await getLastSessionHistory(20);
             if (typeof callback === "function") {
                 callback(history);
             }
@@ -275,11 +293,15 @@ app.post("/api/session/start", async (req, res) => {
         }
 
         const result = await pool.query(
-            `INSERT INTO sessions (status, device_ip) VALUES ('active', $1) RETURNING id`,
+            `INSERT INTO sessions (status, device_ip) VALUES ('active', $1) RETURNING id, start_time`,
             [device_ip]
         );
         currentSessionId = result.rows[0].id;
+        const startTime = result.rows[0].start_time;
         currentSessionData = [];
+
+        // уведомляем клиентов
+        io.emit('session_started', { id: currentSessionId, start_time: startTime });
 
         res.json({ session_id: currentSessionId });
     } catch (err) {
@@ -324,7 +346,7 @@ app.post("/api/data", async (req, res) => {
     }
 });
 
-// Клиент: получить последние 20 значений текущей сессии
+// Клиент: получить данные сессии
 app.get("/api/data", async (req, res) => {
     try {
         const requestedSessionId = req.query.session_id ? parseInt(req.query.session_id, 10) : null;
@@ -334,9 +356,8 @@ app.get("/api/data", async (req, res) => {
             return res.status(400).json({ error: 'Invalid session_id' });
         }
 
-        // Если есть данные текущей активной сессии в памяти и не запрошен конкретный session_id — отдаём их
-        if (!sessionId && currentSessionData.length > 0) {
-            return res.json(currentSessionData);
+        if (!sessionId && currentSessionId) {
+            sessionId = currentSessionId;
         }
 
         if (!sessionId) {
