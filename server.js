@@ -68,12 +68,18 @@ let currentSessionData = [];
 // ==========================
 
 io.on("connection", (socket) => {
-    console.log("Client connected:", socket.id);
+    console.log("Client connected:", socket.id, "addr:", socket.handshake.address);
 
     // --- Микроконтроллер отправляет данные ---
     socket.on("esp_data", async (data) => {
         // Помечаем сокет как ESP
         socket.isESP = true;
+        try {
+            console.log("Received esp_data from", socket.id, "data:", data);
+        } catch (e) {
+            console.log("Received esp_data (unserializable) from", socket.id);
+        }
+
         const { temperature, humidity, light } = data;
 
         // Если сессия ещё не начата — создаём
@@ -107,9 +113,9 @@ io.on("connection", (socket) => {
             if (currentSessionData.length > 20) {
                 currentSessionData = currentSessionData.slice(-20);
             }
-
             // Рассылаем всем клиентам (кроме ESP)
             socket.broadcast.emit("sensor_update", newData);
+            console.log("Inserted sensor_data id=", newData.id, "temp=", newData.temperature, "emitted sensor_update");
         } catch (err) {
             console.error("Sensor data insert error:", err);
         }
@@ -369,6 +375,32 @@ app.post("/api/settings", async (req, res) => {
 
         res.json(updatedSettings);
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Admin: посмотреть последние N записей и сколько старых
+app.get('/admin/last-data', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit) || 50;
+        const result = await pool.query(
+            `SELECT id, temperature, humidity, light, created_at
+             FROM sensor_data
+             ORDER BY created_at DESC
+             LIMIT $1`,
+            [limit]
+        );
+
+        const oldCountRes = await pool.query(
+            `SELECT COUNT(*) FROM sensor_data WHERE created_at < NOW() - INTERVAL '7 days'`
+        );
+
+        res.json({
+            recent: result.rows,
+            old_count: parseInt(oldCountRes.rows[0].count, 10)
+        });
+    } catch (err) {
+        console.error('Admin last-data error:', err);
         res.status(500).json({ error: err.message });
     }
 });
