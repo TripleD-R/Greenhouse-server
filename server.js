@@ -23,8 +23,34 @@ const pool = new Pool({
 });
 
 pool.connect()
-    .then(() => console.log("DB connected"))
+    .then(async () => {
+        console.log("DB connected");
+        // Попытка создать индекс для ускорения операций очистки
+        try {
+            await pool.query("CREATE INDEX IF NOT EXISTS idx_sensor_data_created_at ON sensor_data(created_at)");
+            console.log("Ensured index idx_sensor_data_created_at");
+        } catch (e) {
+            // Таблица может ещё не существовать при первом запуске — игнорируем ошибку
+            console.warn("Could not create index (table may not exist yet):", e.message);
+        }
+    })
     .catch(err => console.error("DB error:", err));
+
+// Очистка старых данных — удаляем записи старше 7 дней
+const cleanupOldSensorData = async () => {
+    try {
+        const res = await pool.query("DELETE FROM sensor_data WHERE created_at < NOW() - INTERVAL '7 days'");
+        if (res && typeof res.rowCount === 'number') {
+            console.log(`Cleanup: removed ${res.rowCount} old sensor_data rows`);
+        }
+    } catch (err) {
+        console.error("Cleanup error:", err);
+    }
+};
+
+// Выполнить очистку при старте и запускать раз в 24 часа
+cleanupOldSensorData().catch(() => {});
+setInterval(cleanupOldSensorData, 24 * 60 * 60 * 1000);
 
 // ==========================
 // СОСТОЯНИЕ СЕРВЕРА
@@ -168,15 +194,24 @@ io.on("connection", (socket) => {
     // --- Клиент запрашивает последние 20 значений ---
     socket.on("get_history", async (callback) => {
         try {
-            // Возвращаем данные только текущей активной сессии
+            // Если в памяти есть активная сессия, отдаём её
             if (currentSessionData.length > 0) {
                 if (typeof callback === "function") {
                     callback(currentSessionData);
                 }
-            } else {
-                if (typeof callback === "function") {
-                    callback([]);
-                }
+                return;
+            }
+
+            // В противном случае берём последние 20 точек из БД
+            const result = await pool.query(
+                `SELECT temperature, humidity, light, created_at
+                 FROM sensor_data
+                 ORDER BY created_at DESC
+                 LIMIT 20`
+            );
+            const history = result.rows.reverse();
+            if (typeof callback === "function") {
+                callback(history);
             }
         } catch (err) {
             console.error("History error:", err);
@@ -269,12 +304,22 @@ app.post("/api/data", async (req, res) => {
 // Клиент: получить последние 20 значений текущей сессии
 app.get("/api/data", async (req, res) => {
     try {
-        // Отдаём только данные текущей активной сессии
-        if (currentSessionId) {
-            res.json(currentSessionData);
-        } else {
-            res.json([]);
+        // Если есть данные текущей активной сессии в памяти — отдаём их
+        if (currentSessionData.length > 0) {
+            return res.json(currentSessionData);
         }
+
+        // Иначе возвращаем последние 20 значений из БД
+        const result = await pool.query(
+            `SELECT temperature, humidity, light, created_at
+             FROM sensor_data
+             ORDER BY created_at DESC
+             LIMIT 20`
+        );
+
+        // Поменяем порядок на хронологический
+        const rows = result.rows.reverse();
+        res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
