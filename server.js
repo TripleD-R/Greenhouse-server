@@ -80,7 +80,7 @@ io.on("connection", (socket) => {
             console.log("Received esp_data (unserializable) from", socket.id);
         }
 
-        const { temperature, humidity, light } = data;
+        const { temperature, soil, light } = data;
 
         // Если сессия ещё не начата — создаём
         if (!currentSessionId) {
@@ -103,7 +103,7 @@ io.on("connection", (socket) => {
             const result = await pool.query(
                 `INSERT INTO sensor_data (temperature, humidity, light, session_id)
                  VALUES ($1, $2, $3, $4) RETURNING *`,
-                [temperature, humidity, light, currentSessionId]
+                [temperature, soil, light, currentSessionId]
             );
             const newData = result.rows[0];
 
@@ -113,8 +113,8 @@ io.on("connection", (socket) => {
             if (currentSessionData.length > 20) {
                 currentSessionData = currentSessionData.slice(-20);
             }
-            // Рассылаем всем клиентам (кроме ESP)
-            socket.broadcast.emit("sensor_update", newData);
+            // Рассылаем всем клиентам
+            io.emit("sensor_update", newData);
             console.log("Inserted sensor_data id=", newData.id, "temp=", newData.temperature, "emitted sensor_update");
         } catch (err) {
             console.error("Sensor data insert error:", err);
