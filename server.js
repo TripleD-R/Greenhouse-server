@@ -198,6 +198,27 @@ io.on("connection", (socket) => {
         }
     });
 
+    const getLastSessionHistory = async (limit = 20) => {
+        const sessionResult = await pool.query(
+            `SELECT id FROM sessions ORDER BY id DESC LIMIT 1`
+        );
+        if (sessionResult.rows.length === 0) {
+            return [];
+        }
+
+        const sessionId = sessionResult.rows[0].id;
+        const dataResult = await pool.query(
+            `SELECT temperature, humidity, light, created_at
+             FROM sensor_data
+             WHERE session_id = $1
+             ORDER BY created_at DESC
+             LIMIT $2`,
+            [sessionId, limit]
+        );
+
+        return dataResult.rows.reverse();
+    };
+
     // --- Клиент запрашивает последние 20 значений ---
     socket.on("get_history", async (callback) => {
         try {
@@ -209,14 +230,8 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            // В противном случае берём последние 20 точек из БД
-            const result = await pool.query(
-                `SELECT temperature, humidity, light, created_at
-                 FROM sensor_data
-                 ORDER BY created_at DESC
-                 LIMIT 20`
-            );
-            const history = result.rows.reverse();
+            // В противном случае берём последние 20 точек из самой последней сессии из БД
+            const history = await getLastSessionHistory(20);
             if (typeof callback === "function") {
                 callback(history);
             }
@@ -312,23 +327,92 @@ app.post("/api/data", async (req, res) => {
 // Клиент: получить последние 20 значений текущей сессии
 app.get("/api/data", async (req, res) => {
     try {
-        // Если есть данные текущей активной сессии в памяти — отдаём их
-        if (currentSessionData.length > 0) {
+        const requestedSessionId = req.query.session_id ? parseInt(req.query.session_id, 10) : null;
+        let sessionId = requestedSessionId;
+
+        if (requestedSessionId && isNaN(requestedSessionId)) {
+            return res.status(400).json({ error: 'Invalid session_id' });
+        }
+
+        // Если есть данные текущей активной сессии в памяти и не запрошен конкретный session_id — отдаём их
+        if (!sessionId && currentSessionData.length > 0) {
             return res.json(currentSessionData);
         }
 
-        // Иначе возвращаем последние 20 значений из БД
+        if (!sessionId) {
+            const sessionResult = await pool.query(
+                `SELECT id FROM sessions ORDER BY id DESC LIMIT 1`
+            );
+
+            if (sessionResult.rows.length === 0) {
+                return res.json([]);
+            }
+
+            sessionId = sessionResult.rows[0].id;
+        }
+
         const result = await pool.query(
-            `SELECT temperature, humidity, light, created_at
+            `SELECT id, temperature, humidity, light, created_at
              FROM sensor_data
-             ORDER BY created_at DESC
-             LIMIT 20`
+             WHERE session_id = $1
+             ORDER BY created_at ASC`,
+            [sessionId]
         );
 
-        // Поменяем порядок на хронологический
-        const rows = result.rows.reverse();
-        res.json(rows);
+        res.json(result.rows);
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/sessions', async (req, res) => {
+    try {
+        const limit = parseInt(req.query.limit, 10) || 50;
+        const result = await pool.query(
+            `SELECT s.id, s.status, s.device_ip, s.start_time, s.end_time,
+                    COUNT(sd.id) AS data_count
+             FROM sessions s
+             LEFT JOIN sensor_data sd ON sd.session_id = s.id
+             GROUP BY s.id
+             ORDER BY s.start_time DESC
+             LIMIT $1`,
+            [limit]
+        );
+
+        const sessions = result.rows.map(row => ({
+            id: row.id,
+            status: row.status,
+            device_ip: row.device_ip,
+            start_time: row.start_time,
+            end_time: row.end_time,
+            data_count: parseInt(row.data_count, 10),
+        }));
+
+        res.json(sessions);
+    } catch (err) {
+        console.error('Sessions list error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/sessions/:id/data', async (req, res) => {
+    try {
+        const sessionId = parseInt(req.params.id, 10);
+        if (isNaN(sessionId)) {
+            return res.status(400).json({ error: 'Invalid session id' });
+        }
+
+        const result = await pool.query(
+            `SELECT id, temperature, humidity, light, created_at
+             FROM sensor_data
+             WHERE session_id = $1
+             ORDER BY created_at ASC`,
+            [sessionId]
+        );
+
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Session data error:', err);
         res.status(500).json({ error: err.message });
     }
 });
