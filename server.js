@@ -208,6 +208,50 @@ io.on("connection", (socket) => {
         }
     });
 
+    // --- Обработка настроек, присланных ESP в camelCase (совместимость) ---
+    socket.on("esp_settings", async (settings) => {
+        // Поддерживаем оба формата: camelCase от ESP и snake_case от веб-клиента
+        const max_temp = settings.maxTemp !== undefined ? settings.maxTemp : settings.max_temp;
+        const min_hum = settings.minSoil !== undefined ? settings.minSoil : settings.min_hum;
+        const min_light = settings.minLight !== undefined ? settings.minLight : settings.min_light;
+
+        if (max_temp === undefined || min_hum === undefined || min_light === undefined) {
+            console.warn("esp_settings received with missing fields:", settings);
+            socket.emit("settings_error", { error: 'Missing fields in esp_settings' });
+            return;
+        }
+
+        try {
+            const result = await pool.query(
+                `UPDATE settings
+                 SET max_temp=$1, min_hum=$2, min_light=$3, updated_at=NOW()
+                 WHERE id=1
+                 RETURNING *`,
+                [max_temp, min_hum, min_light]
+            );
+
+            const updatedSettings = result.rows[0];
+            cachedSettings = updatedSettings;
+
+            const espSettings = {
+                maxTemp: updatedSettings.max_temp,
+                minSoil: updatedSettings.min_hum,
+                minLight: updatedSettings.min_light,
+            };
+
+            // Рассылаем обновлённые настройки всем клиентам
+            io.emit("settings_update", updatedSettings);
+            io.emit("esp_settings", espSettings);
+
+            console.log("esp_settings persisted and broadcast:", espSettings);
+            // Подтверждаем отправителю
+            socket.emit("settings_ok", espSettings);
+        } catch (err) {
+            console.error("esp_settings save error:", err);
+            socket.emit("settings_error", { error: err.message });
+        }
+    });
+
     const getSessionHistory = async (sessionId) => {
         const dataResult = await pool.query(
             `SELECT temperature, humidity, light, created_at
